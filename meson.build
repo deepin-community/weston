@@ -1,6 +1,6 @@
 project('weston',
 	'c',
-	version: '12.0.1',
+	version: '14.0.2',
 	default_options: [
 		'warning_level=3',
 		'c_std=gnu99',
@@ -10,7 +10,7 @@ project('weston',
 	license: 'MIT/Expat',
 )
 
-libweston_major = 12
+libweston_major = 14
 
 # libweston_revision is manufactured to follow the autotools build's
 # library file naming, thanks to libtool
@@ -27,24 +27,21 @@ else
 	error('Bad versions in meson.build: libweston_major is too low')
 endif
 
-if not (get_option('deprecated-launcher-logind') or get_option('launcher-libseat'))
-       error('At least one launcher must be enabled')
-endif
-
 dir_prefix = get_option('prefix')
-dir_bin = join_paths(dir_prefix, get_option('bindir'))
-dir_data = join_paths(dir_prefix, get_option('datadir'))
+dir_bin = dir_prefix / get_option('bindir')
+dir_data = dir_prefix / get_option('datadir')
 dir_include_libweston = 'libweston-@0@'.format(libweston_major)
-dir_include_libweston_install = join_paths(dir_include_libweston, 'libweston')
-dir_lib = join_paths(dir_prefix, get_option('libdir'))
-dir_libexec = join_paths(dir_prefix, get_option('libexecdir'))
-dir_module_weston = join_paths(dir_lib, 'weston')
-dir_module_libweston = join_paths(dir_lib, 'libweston-@0@'.format(libweston_major))
-dir_data_pc = join_paths(dir_data, 'pkgconfig')
-dir_lib_pc = join_paths(dir_lib, 'pkgconfig')
-dir_man = join_paths(dir_prefix, get_option('mandir'))
-dir_protocol_libweston = join_paths('libweston-@0@'.format(libweston_major), 'protocols')
-dir_sysconf = join_paths(dir_prefix, get_option('sysconfdir'))
+dir_include_libweston_install = dir_include_libweston / 'libweston'
+dir_lib = dir_prefix /get_option('libdir')
+dir_libexec = dir_prefix / get_option('libexecdir')
+dir_module_weston = dir_lib / 'weston'
+dir_module_libweston = dir_lib / 'libweston-@0@'.format(libweston_major)
+dir_data_pc = dir_data / 'pkgconfig'
+dir_lib_pc = dir_lib / 'pkgconfig'
+dir_man = dir_prefix / get_option('mandir')
+dir_protocol_libweston = 'libweston-@0@'.format(libweston_major) / 'protocols'
+dir_sysconf = dir_prefix / get_option('sysconfdir')
+dir_gitlab_ci = meson.project_source_root() / '.gitlab-ci'
 
 public_inc = include_directories('include')
 common_inc = [ include_directories('.'), public_inc ]
@@ -97,6 +94,17 @@ foreach hdr : optional_system_headers
 	endif
 endforeach
 
+optional_builtins = {
+	'builtin_clz': 'return __builtin_clz(1);',
+	'builtin_bswap32': 'return __builtin_bswap32(0);',
+	'builtin_popcount': 'return __builtin_popcount(0);',
+}
+foreach name, check : optional_builtins
+	if cc.links('int main(void) { @0@ }'.format(check), name: name)
+		config_h.set('HAVE_' + name.to_upper(), 1)
+	endif
+endforeach
+
 env_modmap = ''
 
 config_h.set('_GNU_SOURCE', '1')
@@ -136,8 +144,8 @@ if dep_xkbcommon.version().version_compare('>= 0.5.0')
 	config_h.set('HAVE_XKBCOMMON_COMPOSE', '1')
 endif
 
-dep_wayland_server = dependency('wayland-server', version: '>= 1.20.0')
-dep_wayland_client = dependency('wayland-client', version: '>= 1.20.0')
+dep_wayland_server = dependency('wayland-server', version: '>= 1.22.0')
+dep_wayland_client = dependency('wayland-client', version: '>= 1.22.0')
 dep_pixman = dependency('pixman-1', version: '>= 0.25.2')
 dep_libinput = dependency('libinput', version: '>= 1.2.0')
 dep_libevdev = dependency('libevdev')
@@ -148,6 +156,9 @@ dep_libdrm_headers = dep_libdrm.partial_dependency(compile_args: true)
 dep_threads = dependency('threads')
 
 dep_lcms2 = dependency('lcms2', version: '>= 2.9', required: false)
+if dep_lcms2.found()
+	config_h.set('HAVE_LCMS', '1')
+endif
 
 prog_python = import('python').find_installation('python3')
 files_xxd_py = files('tools/xxd.py')
@@ -159,13 +170,22 @@ deps_for_libweston_users = [
 	dep_xkbcommon,
 ]
 
+if get_option('renderer-gl')
+	dep_egl = dependency('egl', required: false)
+	if not dep_egl.found()
+		error('libweston + gl-renderer requires egl which was not found. Or, you can use \'-Drenderer-gl=false\'.')
+	endif
+else
+	dep_egl = dependency('', required: false)
+endif
+
 
 subdir('include')
 subdir('protocol')
 subdir('shared')
 subdir('libweston')
 subdir('xwayland')
-subdir('compositor')
+subdir('frontend')
 subdir('desktop-shell')
 subdir('fullscreen-shell')
 subdir('ivi-shell')
@@ -174,7 +194,9 @@ subdir('remoting')
 subdir('pipewire')
 subdir('clients')
 subdir('wcap')
-subdir('tests')
+if get_option('tests')
+	subdir('tests')
+endif
 subdir('data')
 subdir('man')
 subdir('pam')
@@ -182,7 +204,7 @@ subdir('pam')
 if meson.version().version_compare('>= 0.58.0')
 	devenv = environment()
 	devenv.set('WESTON_MODULE_MAP', env_modmap)
-	devenv.set('WESTON_DATA_DIR', join_paths(meson.current_source_dir(), 'data'))
+	devenv.set('WESTON_DATA_DIR', meson.current_source_dir() / 'data')
 	meson.add_devenv(devenv)
 endif
 

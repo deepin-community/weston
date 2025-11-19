@@ -62,6 +62,12 @@ weston_renderbuffer_unref(struct weston_renderbuffer *renderbuffer);
 struct weston_renderer_options {
 };
 
+struct linux_dmabuf_memory {
+	struct dmabuf_attributes *attributes;
+
+	void (*destroy)(struct linux_dmabuf_memory *dmabuf);
+};
+
 struct weston_renderer {
 	int (*read_pixels)(struct weston_output *output,
 			   const struct pixel_format_info *format, void *pixels,
@@ -79,9 +85,8 @@ struct weston_renderer {
 			      const struct weston_size *fb_size,
 			      const struct weston_geometry *area);
 
-	void (*flush_damage)(struct weston_surface *surface,
-			     struct weston_buffer *buffer);
-	void (*attach)(struct weston_surface *es, struct weston_buffer *buffer);
+	void (*flush_damage)(struct weston_paint_node *pnode);
+	void (*attach)(struct weston_paint_node *pnode);
 	void (*destroy)(struct weston_compositor *ec);
 
 	/** See weston_surface_copy_content() */
@@ -99,6 +104,63 @@ struct weston_renderer {
 
 	bool (*fill_buffer_info)(struct weston_compositor *ec,
 				 struct weston_buffer *buffer);
+
+	void (*buffer_init)(struct weston_compositor *ec,
+			    struct weston_buffer *buffer);
+
+	/**
+	 * Add DMABUF as renderbuffer to the output
+	 *
+	 * \param output The output to add the DMABUF renderbuffer for.
+	 * \param dmabuf The description object of the DMABUF to import.
+	 * \return A weston_renderbuffer on success, NULL on failure.
+	 *
+	 * This function imports the DMABUF memory as renderbuffer and adds
+	 * it to the output. The returned weston_renderbuffer can be passed to
+	 * repaint_output() to render into the DMABUF.
+	 *
+	 * The ownership of the linux_dmabuf_memory is transferred to the
+	 * returned weston_renderbuffer. The linux_dmabuf_memory will be
+	 * destroyed automatically when the weston_renderbuffer is destroyed.
+	 */
+	struct weston_renderbuffer *
+			(*create_renderbuffer_dmabuf)(struct weston_output *output,
+						      struct linux_dmabuf_memory *dmabuf);
+
+	/**
+	 * Remove the DAMBUF renderbuffer from the output
+	 *
+	 * \param output The output to remove a DMABUF renderbuffer from.
+	 * \param renderbuffer The weston_renderbuffer that shall be removed
+	 *
+	 * This function removes the DMABUF renderbuffer from the output.
+	 *
+	 * This allows the backend to signal the renderer that it will no longer
+	 * use the renderbuffer for rendering and the renderer may free the
+	 * resources of the renderbuffer.
+	 */
+	void (*remove_renderbuffer_dmabuf)(struct weston_output *output,
+					   struct weston_renderbuffer *renderbuffer);
+
+	/* Allocate a DMABUF that can be imported as renderbuffer
+	 *
+	 * \param renderer The renderer that allocated the DMABUF
+	 * \param width The width of the allocated DMABUF
+	 * \param height The height of the allocated DMABUF
+	 * \param format The pixel format of the allocated DMABUF
+	 * \param modifiers The suggested modifiers for the allocated DMABUF
+	 * \param count The number of suggested modifiers for the allocated DMABUF
+	 * \return A linux_dmabuf_memory object that may be imported as renderbuffer
+	 *
+	 * Request a DMABUF from the renderer. The returned DMABUF can be
+	 * imported into the renderer as a renderbuffer and exported to other
+	 * processes.
+	 */
+	struct linux_dmabuf_memory *
+			(*dmabuf_alloc)(struct weston_renderer *renderer,
+					unsigned int width, unsigned int height,
+					uint32_t format,
+					const uint64_t *modifiers, unsigned int count);
 
 	enum weston_renderer_type type;
 	const struct gl_renderer_interface *gl;
@@ -237,15 +299,6 @@ weston_compositor_set_touch_mode_normal(struct weston_compositor *compositor);
 void
 weston_compositor_set_touch_mode_calib(struct weston_compositor *compositor);
 
-int
-weston_compositor_set_presentation_clock(struct weston_compositor *compositor,
-					 clockid_t clk_id);
-int
-weston_compositor_set_presentation_clock_software(
-					struct weston_compositor *compositor);
-void
-weston_compositor_shutdown(struct weston_compositor *ec);
-
 void
 weston_compositor_xkb_destroy(struct weston_compositor *ec);
 
@@ -259,6 +312,10 @@ weston_output_disable_planes_incr(struct weston_output *output);
 
 void
 weston_output_disable_planes_decr(struct weston_output *output);
+
+void
+weston_output_set_single_mode(struct weston_output *output,
+			      struct weston_mode *target);
 
 /* weston_plane */
 
@@ -420,8 +477,8 @@ weston_view_takes_input_at_point(struct weston_view *view,
 				 struct weston_coord_surface surf_pos);
 
 void
-weston_view_move_to_plane(struct weston_view *view,
-			  struct weston_plane *plane);
+weston_paint_node_move_to_plane(struct weston_paint_node *pnode,
+				struct weston_plane *plane);
 void
 weston_view_buffer_to_output_matrix(const struct weston_view *view,
 				    const struct weston_output *output,
@@ -508,9 +565,13 @@ weston_compositor_destroy_touch_calibrator(struct weston_compositor *compositor)
 
 enum paint_node_status {
 	PAINT_NODE_CLEAN = 0,
-	PAINT_NODE_OUTPUT_DIRTY = 1 << 1,
-	PAINT_NODE_VIEW_DIRTY = 1 << 2,
-	PAINT_NODE_ALL_DIRTY = 0xf,
+	PAINT_NODE_OUTPUT_DIRTY = 1 << 0,
+	PAINT_NODE_VIEW_DIRTY = 1 << 1,
+	PAINT_NODE_VISIBILITY_DIRTY = 1 << 2,
+	PAINT_NODE_PLANE_DIRTY = 1 << 3,
+	PAINT_NODE_CONTENT_DIRTY = 1 << 4,
+	PAINT_NODE_BUFFER_DIRTY = 1 << 5,
+	PAINT_NODE_ALL_DIRTY = (1 << 6) - 1,
 };
 
 /**
@@ -546,10 +607,22 @@ struct weston_paint_node {
 	/* struct weston_output::paint_node_z_order_list */
 	struct wl_list z_order_link;
 
+	pixman_region32_t visible;
+	pixman_region32_t damage; /* In global coordinates */
+	struct weston_plane *plane;
+	struct weston_plane *plane_next;
+
 	struct weston_surface_color_transform surf_xform;
 	bool surf_xform_valid;
 
 	uint32_t try_view_on_plane_failure_reasons;
+	bool is_fully_opaque;
+	bool is_fully_blended;
+	bool is_direct;
+	bool draw_solid;
+	struct weston_solid_buffer_values solid;
+	bool need_hole;
+	uint32_t psf_flags; /* presentation-feedback flags */
 };
 
 struct weston_paint_node *
@@ -582,5 +655,9 @@ convert_size_by_transform_scale(int32_t *width_out, int32_t *height_out,
 
 bool
 weston_authenticate_user(const char *username, const char *password);
+
+void
+weston_output_copy_native_mode(struct weston_output *output,
+			       struct weston_mode *mode);
 
 #endif

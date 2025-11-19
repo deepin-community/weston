@@ -47,10 +47,13 @@
 #include "shared/weston-egl-ext.h"
 #include "shared/cairo-util.h"
 #include "shared/xalloc.h"
+#include "shared/timespec-util.h"
 #include "linux-dmabuf.h"
 #include "output-capture.h"
 #include "presentation-time-server-protocol.h"
 #include <libweston/windowed-output-api.h>
+
+#define DEFAULT_OUTPUT_REPAINT_REFRESH 60000 /* In mHz. */
 
 struct headless_backend {
 	struct weston_backend base;
@@ -63,6 +66,9 @@ struct headless_backend {
 
 	const struct pixel_format_info **formats;
 	unsigned int formats_count;
+
+	int refresh;
+	bool repaint_only_on_capture;
 };
 
 struct headless_head {
@@ -131,10 +137,8 @@ static int
 finish_frame_handler(void *data)
 {
 	struct headless_output *output = data;
-	struct timespec ts;
 
-	weston_compositor_read_presentation_clock(output->base.compositor, &ts);
-	weston_output_finish_frame(&output->base, &ts, 0);
+	weston_output_finish_frame_from_timer(&output->base);
 
 	return 1;
 }
@@ -152,11 +156,12 @@ headless_output_update_gl_border(struct headless_output *output)
 }
 
 static int
-headless_output_repaint(struct weston_output *output_base,
-		       pixman_region32_t *damage)
+headless_output_repaint(struct weston_output *output_base)
 {
 	struct headless_output *output = to_headless_output(output_base);
 	struct weston_compositor *ec;
+	pixman_region32_t damage;
+	int delay_msec;
 
 	assert(output);
 
@@ -164,13 +169,17 @@ headless_output_repaint(struct weston_output *output_base,
 
 	headless_output_update_gl_border(output);
 
-	ec->renderer->repaint_output(&output->base, damage,
+	pixman_region32_init(&damage);
+
+	weston_output_flush_damage_for_primary_plane(output_base, &damage);
+
+	ec->renderer->repaint_output(&output->base, &damage,
 				     output->renderbuffer);
 
-	pixman_region32_subtract(&ec->primary_plane.damage,
-				 &ec->primary_plane.damage, damage);
+	pixman_region32_fini(&damage);
 
-	wl_event_source_timer_update(output->finish_frame_timer, 16);
+	delay_msec = millihz_to_nsec(output->mode.refresh) / 1000000;
+	wl_event_source_timer_update(output->finish_frame_timer, delay_msec);
 
 	return 0;
 }
@@ -183,6 +192,8 @@ headless_output_disable_gl(struct headless_output *output)
 
 	weston_gl_borders_fini(&output->gl.borders, &output->base);
 
+	weston_renderbuffer_unref(output->renderbuffer);
+	output->renderbuffer = NULL;
 	renderer->gl->output_destroy(&output->base);
 
 	if (output->frame) {
@@ -252,10 +263,7 @@ headless_output_enable_gl(struct headless_output *output)
 	struct headless_backend *b = output->backend;
 	const struct weston_renderer *renderer = b->compositor->renderer;
 	const struct weston_mode *mode = output->base.current_mode;
-	struct gl_renderer_pbuffer_options options = {
-		.formats = b->formats,
-		.formats_count = b->formats_count,
-	};
+	struct gl_renderer_fbo_options options = { 0 };
 
 	if (b->decorate) {
 		/*
@@ -283,7 +291,7 @@ headless_output_enable_gl(struct headless_output *output)
 		options.fb_size.height = mode->height;
 	}
 
-	if (renderer->gl->output_pbuffer_create(&output->base, &options) < 0) {
+	if (renderer->gl->output_fbo_create(&output->base, &options) < 0) {
 		weston_log("failed to create gl renderer output state\n");
 		if (output->frame) {
 			frame_destroy(output->frame);
@@ -292,7 +300,19 @@ headless_output_enable_gl(struct headless_output *output)
 		return -1;
 	}
 
+	output->renderbuffer =
+		renderer->gl->create_fbo(&output->base, b->formats[0],
+					 options.fb_size.width,
+					 options.fb_size.height, NULL);
+	if (!output->renderbuffer)
+		goto err_renderbuffer;
+
 	return 0;
+
+err_renderbuffer:
+	renderer->gl->output_destroy(&output->base);
+
+	return -1;
 }
 
 static int
@@ -385,7 +405,7 @@ headless_output_set_size(struct weston_output *base,
 	assert(!output->base.current_mode);
 
 	/* Make sure we have scale set. */
-	assert(output->base.scale);
+	assert(output->base.current_scale);
 
 	wl_list_for_each(head, &output->base.head_list, output_link) {
 		weston_head_set_monitor_strings(head, "weston", "headless",
@@ -395,14 +415,14 @@ headless_output_set_size(struct weston_output *base,
 		weston_head_set_physical_size(head, width, height);
 	}
 
-	output_width = width * output->base.scale;
-	output_height = height * output->base.scale;
+	output_width = width * output->base.current_scale;
+	output_height = height * output->base.current_scale;
 
 	output->mode.flags =
 		WL_OUTPUT_MODE_CURRENT | WL_OUTPUT_MODE_PREFERRED;
 	output->mode.width = output_width;
 	output->mode.height = output_height;
-	output->mode.refresh = 60000;
+	output->mode.refresh = output->backend->refresh;
 	wl_list_insert(&output->base.mode_list, &output->mode.link);
 
 	output->base.current_mode = &output->mode;
@@ -437,6 +457,7 @@ headless_output_create(struct weston_backend *backend, const char *name)
 	output->base.disable = headless_output_disable;
 	output->base.enable = headless_output_enable;
 	output->base.attach_head = NULL;
+	output->base.repaint_only_on_capture = b->repaint_only_on_capture;
 
 	output->backend = b;
 
@@ -466,6 +487,8 @@ headless_head_create(struct weston_backend *base,
 	weston_head_set_connection_status(&head->base, true);
 	weston_head_set_supported_eotf_mask(&head->base,
 					    WESTON_EOTF_MODE_ALL_MASK);
+	weston_head_set_supported_colorimetry_mask(&head->base,
+						   WESTON_COLORIMETRY_MODE_ALL_MASK);
 
 	/* Ideally all attributes of the head would be set here, so that the
 	 * user has all the information when deciding to create outputs.
@@ -495,7 +518,7 @@ headless_destroy(struct weston_backend *backend)
 	struct weston_compositor *ec = b->compositor;
 	struct weston_head *base, *next;
 
-	weston_compositor_shutdown(ec);
+	wl_list_remove(&b->base.link);
 
 	wl_list_for_each_safe(base, next, &ec->head_list, compositor_link) {
 		if (to_headless_head(base))
@@ -508,7 +531,10 @@ headless_destroy(struct weston_backend *backend)
 	free(b->formats);
 	free(b);
 
-	cleanup_after_cairo();
+	/* XXX: cleaning up after cairo/fontconfig here might seem suitable,
+	 * but fontconfig will create additional threads which we can't wait
+	 * for -- in order to realiably de-allocate all resources, as to get a
+	 * report without any mem leaks. */
 }
 
 static const struct weston_windowed_output_api api = {
@@ -528,10 +554,10 @@ headless_backend_create(struct weston_compositor *compositor,
 		return NULL;
 
 	b->compositor = compositor;
-	compositor->backend = &b->base;
+	wl_list_insert(&compositor->backend_list, &b->base.link);
 
-	if (weston_compositor_set_presentation_clock_software(compositor) < 0)
-		goto err_free;
+	b->base.supported_presentation_clocks =
+			WESTON_PRESENTATION_CLOCKS_SOFTWARE;
 
 	b->base.destroy = headless_destroy;
 	b->base.create_output = headless_output_create;
@@ -548,58 +574,66 @@ headless_backend_create(struct weston_compositor *compositor,
 	b->formats_count = ARRAY_LENGTH(headless_formats);
 	b->formats = pixel_format_get_array(headless_formats, b->formats_count);
 
-	switch (config->renderer) {
-	case WESTON_RENDERER_GL: {
-		const struct gl_renderer_display_options options = {
-			.egl_platform = EGL_PLATFORM_SURFACELESS_MESA,
-			.egl_native_display = NULL,
-			.egl_surface_type = EGL_PBUFFER_BIT,
-			.formats = b->formats,
-			.formats_count = b->formats_count,
-		};
-		ret = weston_compositor_init_renderer(compositor,
-						      WESTON_RENDERER_GL,
-						      &options.base);
-		break;
-	}
-	case WESTON_RENDERER_PIXMAN:
-		if (config->decorate) {
-			weston_log("Error: Pixman renderer does not support decorations.\n");
-			goto err_input;
-		}
-		ret = weston_compositor_init_renderer(compositor,
-						      WESTON_RENDERER_PIXMAN,
-						      NULL);
-		break;
-	case WESTON_RENDERER_AUTO:
-	case WESTON_RENDERER_NOOP:
-		if (config->decorate) {
-			weston_log("Error: no-op renderer does not support decorations.\n");
-			goto err_input;
-		}
-		ret = noop_renderer_init(compositor);
-		break;
-	default:
-		weston_log("Error: unsupported renderer\n");
-		break;
+	/* Wayland event source's timeout has a granularity of the order of
+	 * milliseconds so the highest supported rate is 1 kHz. 0 is a special
+	 * value that enables repaints only on capture. */
+	if (config->refresh > 0) {
+		b->refresh = MIN(config->refresh, 1000000);
+	} else if (config->refresh == 0) {
+		b->refresh = 1000000;
+		b->repaint_only_on_capture = true;
+	} else {
+		b->refresh = DEFAULT_OUTPUT_REPAINT_REFRESH;
 	}
 
-	if (ret < 0)
-		goto err_input;
-
-	if (compositor->renderer->import_dmabuf) {
-		if (linux_dmabuf_setup(compositor) < 0) {
-			weston_log("Error: dmabuf protocol setup failed.\n");
-			goto err_input;
+	if (!compositor->renderer) {
+		switch (config->renderer) {
+		case WESTON_RENDERER_GL: {
+			const struct gl_renderer_display_options options = {
+				.egl_platform = EGL_PLATFORM_SURFACELESS_MESA,
+				.egl_native_display = NULL,
+				.formats = b->formats,
+				.formats_count = b->formats_count,
+			};
+			ret = weston_compositor_init_renderer(compositor,
+							      WESTON_RENDERER_GL,
+							      &options.base);
+			break;
 		}
+		case WESTON_RENDERER_PIXMAN:
+			if (config->decorate) {
+				weston_log("Error: Pixman renderer does not support decorations.\n");
+				goto err_input;
+			}
+			ret = weston_compositor_init_renderer(compositor,
+							      WESTON_RENDERER_PIXMAN,
+							      NULL);
+			break;
+		case WESTON_RENDERER_AUTO:
+		case WESTON_RENDERER_NOOP:
+			if (config->decorate) {
+				weston_log("Error: no-op renderer does not support decorations.\n");
+				goto err_input;
+			}
+			ret = noop_renderer_init(compositor);
+			break;
+		default:
+			weston_log("Error: unsupported renderer\n");
+			ret = -1;
+			break;
+		}
+
+		if (ret < 0)
+			goto err_input;
+
+		/* Support zwp_linux_explicit_synchronization_unstable_v1 to enable
+		 * testing. */
+		if (linux_explicit_synchronization_setup(compositor) < 0)
+			goto err_input;
 	}
 
-	/* Support zwp_linux_explicit_synchronization_unstable_v1 to enable
-	 * testing. */
-	if (linux_explicit_synchronization_setup(compositor) < 0)
-		goto err_input;
-
-	ret = weston_plugin_api_register(compositor, WESTON_WINDOWED_OUTPUT_API_NAME,
+	ret = weston_plugin_api_register(compositor,
+					 WESTON_WINDOWED_OUTPUT_API_NAME_HEADLESS,
 					 &api, sizeof(api));
 
 	if (ret < 0) {
@@ -612,9 +646,8 @@ headless_backend_create(struct weston_compositor *compositor,
 err_input:
 	if (b->theme)
 		theme_destroy(b->theme);
-
-	weston_compositor_shutdown(compositor);
 err_free:
+	wl_list_remove(&b->base.link);
 	free(b);
 	return NULL;
 }
@@ -622,6 +655,7 @@ err_free:
 static void
 config_init_to_defaults(struct weston_headless_backend_config *config)
 {
+	config->refresh = DEFAULT_OUTPUT_REPAINT_REFRESH;
 }
 
 WL_EXPORT int

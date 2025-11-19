@@ -15,6 +15,7 @@ lib_test_runner = static_library(
 		dep_libweston_private_h_deps,
 		dep_wayland_client,
                 dep_libdl,
+                dep_threads,
 	],
 	include_directories: common_inc,
 	install: false,
@@ -35,6 +36,8 @@ lib_test_client = static_library(
 		weston_output_capture_protocol_c,
 		viewporter_client_protocol_h,
 		viewporter_protocol_c,
+		xdg_shell_client_protocol_h,
+		xdg_shell_protocol_c,
 		'color_util.h',
 		'color_util.c',
 	],
@@ -46,6 +49,7 @@ lib_test_client = static_library(
 		dep_libweston_private,
 		dep_libdrm_headers,
 		dep_pixman,
+                dep_threads,
 		dependency('cairo'),
 	],
 	install: false,
@@ -60,6 +64,7 @@ dep_test_client = declare_dependency(
 		dep_test_runner,
 		dep_pixman,
 		dep_libdrm_headers,
+                dep_threads,
 		dependency('libudev', version: '>= 136'),
 	]
 )
@@ -69,7 +74,7 @@ lib_lcms_util = static_library(
 	[ 'lcms_util.c' ],
 	include_directories: common_inc,
 	dependencies: [
-		dep_lcms2, dep_libm
+		dep_lcms2, dep_libm, dep_wayland_server
 	],
 	build_by_default: false,
 	install: false,
@@ -142,13 +147,20 @@ tests = [
 		'name': 'alpha-blending',
 		'dep_objs': dep_libm,
 	},
+	{	'name': 'assert', },
 	{	'name': 'bad-buffer', },
 	{	'name': 'buffer-transforms', },
 	{
 		'name': 'color-metadata-errors',
 		'dep_objs': dep_libexec_weston,
 	},
-	{	'name': 'color-manager', },
+	{
+		'name': 'constraints',
+		'sources': [
+			'constraints-test.c',
+			pointer_constraints_unstable_v1_protocol_c,
+		],
+	},
         {       'name': 'custom-env', },
 	{	'name': 'devices', },
 	{
@@ -168,6 +180,14 @@ tests = [
 			input_timestamps_unstable_v1_protocol_c,
 		],
 	},
+	{
+		'name': 'kiosk-shell',
+		'sources': [
+			'kiosk-shell-test.c',
+			xdg_shell_client_protocol_h,
+			xdg_shell_protocol_c,
+		],
+        },
 	{
 		'name': 'linux-explicit-synchronization',
 		'sources': [
@@ -197,6 +217,7 @@ tests = [
 	{	'name': 'output-decorations', },
 	{	'name': 'output-transforms', },
 	{	'name': 'plugin-registry', },
+        {       'name': 'paint-node', },
 	{
 		'name': 'pointer',
 		'sources': [
@@ -269,6 +290,12 @@ tests = [
 		],
 		'dep_objs': [ dep_libweston_public ]
 	},
+	{	'name': 'iterate-debug-scopes',
+		'sources': [
+		  'iterate-debug-scopes-test.c',
+		],
+		'dep_objs': [ dep_libweston_public ]
+	},
 ]
 
 if get_option('renderer-gl')
@@ -287,6 +314,19 @@ if get_option('color-management-lcms')
 		{
 			'name': 'color-icc-output',
 			'dep_objs': [ dep_libm, dep_lcms_util ]
+		},
+		{
+			'name': 'color-lcms-optimizer',
+			'link_with': plugin_color_lcms,
+			'dep_objs': [ dep_lcms_util ]
+		},
+		{	'name': 'color-management',
+			'sources': [
+				'color-management-test.c',
+				color_management_v1_client_protocol_h,
+				color_management_v1_protocol_c,
+			],
+			'dep_objs': [ dep_lcms_util ]
 		},
 		{	'name': 'color-metadata-parsing' },
 		{
@@ -395,6 +435,18 @@ test_config_h.set_quoted('TESTSUITE_PLUGIN_PATH', exe_plugin_test.full_path())
 test_config_h.set10('WESTON_TEST_SKIP_IS_FAILURE', get_option('test-skip-is-failure'))
 configure_file(output: 'test-config.h', configuration: test_config_h)
 
+test_env = {}
+
+# there are some leaks in fontconfig we can't fix;
+# use_tls=0 is a workaround for LeakSanitizer crashing after successful
+# program exit when it scans for leaks. Due to use_tls=0 even more
+# suppressions had to be added.
+# TODO XXX: Try to revert the addition of use_tls=0 when our CI image
+# upgrades from Debian Bookworm to something more recent.
+if get_option('b_sanitize') in ['address', 'address,undefined' ]
+  test_env += { 'LSAN_OPTIONS': 'use_tls=0:suppressions=@0@'.format(dir_gitlab_ci / 'leak-sanitizer.supp') }
+endif
+
 foreach t : tests
 	t_name = 'test-' + t.get('name')
 	t_sources = t.get('sources', [t.get('name') + '-test.c'])
@@ -421,6 +473,7 @@ foreach t : tests
 	test(
 		t.get('name'),
 		t_exe,
+                env: test_env,
 		depends: t.get('test_deps', []),
 		timeout: 120,
 		protocol: 'tap',

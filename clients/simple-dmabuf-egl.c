@@ -48,7 +48,6 @@
 #include "shared/weston-drm-fourcc.h"
 #include <libweston/zalloc.h>
 #include "xdg-shell-client-protocol.h"
-#include "fullscreen-shell-unstable-v1-client-protocol.h"
 #include "linux-dmabuf-unstable-v1-client-protocol.h"
 #include "weston-direct-display-client-protocol.h"
 #include "linux-explicit-synchronization-unstable-v1-client-protocol.h"
@@ -74,7 +73,6 @@ struct display {
 	struct wl_registry *registry;
 	struct wl_compositor *compositor;
 	struct xdg_wm_base *wm_base;
-	struct zwp_fullscreen_shell_v1 *fshell;
 	struct zwp_linux_dmabuf_v1 *dmabuf;
 	struct weston_direct_display_v1 *direct_display;
 	struct zwp_linux_explicit_synchronization_v1 *explicit_sync;
@@ -341,7 +339,6 @@ create_dmabuf_buffer(struct display *display, struct buffer *buffer,
 	buffer->format = display->format;
 	buffer->release_fence_fd = -1;
 
-#ifdef HAVE_GBM_MODIFIERS
 	if (display->modifiers_count > 0) {
 #ifdef HAVE_GBM_BO_CREATE_WITH_MODIFIERS2
 		buffer->bo = gbm_bo_create_with_modifiers2(display->gbm.device,
@@ -362,7 +359,6 @@ create_dmabuf_buffer(struct display *display, struct buffer *buffer,
 		if (buffer->bo)
 			buffer->modifier = gbm_bo_get_modifier(buffer->bo);
 	}
-#endif
 
 	if (!buffer->bo) {
 		buffer->bo = gbm_bo_create(display->gbm.device,
@@ -378,7 +374,6 @@ create_dmabuf_buffer(struct display *display, struct buffer *buffer,
 		goto error;
 	}
 
-#ifdef HAVE_GBM_MODIFIERS
 	buffer->plane_count = gbm_bo_get_plane_count(buffer->bo);
 	for (i = 0; i < buffer->plane_count; ++i) {
 		int ret;
@@ -399,15 +394,6 @@ create_dmabuf_buffer(struct display *display, struct buffer *buffer,
 		buffer->strides[i] = gbm_bo_get_stride_for_plane(buffer->bo, i);
 		buffer->offsets[i] = gbm_bo_get_offset(buffer->bo, i);
 	}
-#else
-	buffer->plane_count = 1;
-	buffer->strides[0] = gbm_bo_get_stride(buffer->bo);
-	buffer->dmabuf_fds[0] = gbm_bo_get_fd(buffer->bo);
-	if (buffer->dmabuf_fds[0] < 0) {
-		fprintf(stderr, "error: failed to get dmabuf_fd\n");
-		goto error;
-	}
-#endif
 
 	params = zwp_linux_dmabuf_v1_create_params(display->dmabuf);
 
@@ -692,11 +678,6 @@ create_window(struct display *display, int width, int height, int opts)
 
 		window->wait_for_configure = true;
 		wl_surface_commit(window->surface);
-	} else if (display->fshell) {
-		zwp_fullscreen_shell_v1_present_surface(display->fshell,
-							window->surface,
-							ZWP_FULLSCREEN_SHELL_V1_PRESENT_METHOD_DEFAULT,
-							NULL);
 	} else {
 		assert(0);
 	}
@@ -1010,7 +991,7 @@ redraw(void *data, struct wl_callback *callback, uint32_t time)
 		zwp_linux_buffer_release_v1_add_listener(
 			buffer->buffer_release, &buffer_release_listener, buffer);
 	} else {
-		glFinish();
+		glFlush();
 	}
 
 	wl_surface_attach(window->surface, buffer->buffer, 0, 0);
@@ -1085,9 +1066,6 @@ registry_handle_global(void *data, struct wl_registry *registry,
 		d->wm_base = wl_registry_bind(registry,
 					      id, &xdg_wm_base_interface, 1);
 		xdg_wm_base_add_listener(d->wm_base, &xdg_wm_base_listener, d);
-	} else if (strcmp(interface, "zwp_fullscreen_shell_v1") == 0) {
-		d->fshell = wl_registry_bind(registry,
-					     id, &zwp_fullscreen_shell_v1_interface, 1);
 	} else if (strcmp(interface, "zwp_linux_dmabuf_v1") == 0) {
 		if (version < 3)
 			return;
@@ -1137,9 +1115,6 @@ destroy_display(struct display *display)
 
 	if (display->wm_base)
 		xdg_wm_base_destroy(display->wm_base);
-
-	if (display->fshell)
-		zwp_fullscreen_shell_v1_release(display->fshell);
 
 	if (display->compositor)
 		wl_compositor_destroy(display->compositor);

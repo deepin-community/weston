@@ -1,5 +1,5 @@
 /*
- * Copyright © 2016 Quentin "Sardem FF7" Glidic
+ * Copyright © 2016 Morgane "Sardem FF7" Glidic
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -49,12 +49,12 @@ weston_desktop_api_surface_removed(struct weston_desktop *desktop,
 void
 weston_desktop_api_committed(struct weston_desktop *desktop,
 			     struct weston_desktop_surface *surface,
-			     int32_t sx, int32_t sy);
+			     struct weston_coord_surface buf_offset);
 void
 weston_desktop_api_show_window_menu(struct weston_desktop *desktop,
 				    struct weston_desktop_surface *surface,
 				    struct weston_seat *seat,
-				    int32_t x, int32_t y);
+				    struct weston_coord_surface offset);
 void
 weston_desktop_api_set_parent(struct weston_desktop *desktop,
 			      struct weston_desktop_surface *surface,
@@ -84,7 +84,7 @@ weston_desktop_api_minimized_requested(struct weston_desktop *desktop,
 void
 weston_desktop_api_set_xwayland_position(struct weston_desktop *desktop,
 					 struct weston_desktop_surface *surface,
-					 int32_t x, int32_t y);
+					 struct weston_coord_global pos);
 
 void
 weston_desktop_api_get_position(struct weston_desktop *desktop,
@@ -108,7 +108,7 @@ struct weston_desktop_surface_implementation {
 	void (*set_orientation)(struct weston_desktop_surface *surface,
 				void *user_data, enum weston_top_level_tiled_orientation tiled_orientation);
 	void (*committed)(struct weston_desktop_surface *surface, void *user_data,
-		          int32_t sx, int32_t sy);
+		          struct weston_coord_surface buf_offset);
 	void (*update_position)(struct weston_desktop_surface *surface,
 				void *user_data);
 	void (*ping)(struct weston_desktop_surface *surface, uint32_t serial,
@@ -213,7 +213,7 @@ weston_desktop_surface_set_geometry(struct weston_desktop_surface *surface,
 void
 weston_desktop_surface_set_relative_to(struct weston_desktop_surface *surface,
 				       struct weston_desktop_surface *parent,
-				       int32_t x, int32_t y, bool use_geometry);
+				       struct weston_coord_surface offset, bool use_geometry);
 void
 weston_desktop_surface_unset_relative_to(struct weston_desktop_surface *surface);
 void
@@ -226,6 +226,12 @@ weston_desktop_surface_popup_ungrab(struct weston_desktop_surface *popup,
 				    struct weston_desktop_seat *seat);
 void
 weston_desktop_surface_popup_dismiss(struct weston_desktop_surface *surface);
+
+struct wl_list *
+weston_desktop_surface_get_grab_seat_list(struct weston_desktop_surface *surface);
+
+void
+weston_desktop_seat_end_grabs_on_seats(struct wl_list *list);
 
 struct weston_desktop_surface *
 weston_desktop_seat_popup_grab_get_topmost_surface(struct weston_desktop_seat *seat);

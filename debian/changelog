@@ -1,3 +1,233 @@
+weston (14.0.2-5) unstable; urgency=high
+
+  * Team upload
+  * Increase build test timeout because of riscv64 (Closes: #1120434)
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Sun, 09 Nov 2025 14:31:47 -0500
+
+weston (14.0.2-4) unstable; urgency=high
+
+  * Team upload
+
+  [ Jeremy Bícha ]
+  * Cherry-pick patch to allow building with libdisplay-info 0.3
+  * Update debian/gbp.conf
+
+  [ Dylan Aïssi ]
+  * Convert watch to version 5 and use Gitlab template
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Sun, 09 Nov 2025 07:53:33 -0500
+
+weston (14.0.2-3) unstable; urgency=medium
+
+  * Upload to unstable.
+
+ -- Dylan Aïssi <daissi@debian.org>  Tue, 23 Sep 2025 09:47:16 +0200
+
+weston (14.0.2-2) experimental; urgency=medium
+
+  * Build Weston documentation and install it in weston-doc.
+  * Add new Build-Deps-Indep: python3-breathe, python3-sphinx and
+      python3-sphinx-rtd-theme.
+  * Cherry-pick upstream patch to fix compatibility with sphinx 8.x.
+  * salsa-ci: add jobs to test nodoc profile and cross-build.
+
+ -- Dylan Aïssi <daissi@debian.org>  Thu, 18 Sep 2025 14:55:41 +0200
+
+weston (14.0.2-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Add some references in debian/upstream/metadata.
+  * Use dh_installman to install manpages.
+  * debian/watch: rely on gitlab releases instead of releases.html
+      which tends to be outdated.
+  * Drop patch included in upstream release.
+  * Add debian/salsa-ci.yml.
+  * Standards-Version: 4.7.2 (no changes required)
+
+ -- Dylan Aïssi <daissi@debian.org>  Fri, 25 Apr 2025 17:28:58 +0200
+
+weston (14.0.1-3) unstable; urgency=medium
+
+  * Cherry pick upstream patch allowing to build against neatvnc 0.9.0
+
+ -- Dylan Aïssi <daissi@debian.org>  Sat, 23 Nov 2024 10:04:10 +0100
+
+weston (14.0.1-2) unstable; urgency=medium
+
+  [ Carlos Henrique Lima Melara ]
+  * d/control: Recommends xwayland so it works out-of-the-box
+
+  [ Dylan Aïssi ]
+  * Run autopkgtest on failing architectures but marked as flaky
+  * Add xwayland in Build-Deps to ensure that HAVE_XWAYLAND_LISTENFD
+      is properly defined
+  * Re-enable xwayland test
+  * Enable tests (build time and autopkgtest) on riscv64 since they are
+      now successful
+
+ -- Dylan Aïssi <daissi@debian.org>  Fri, 08 Nov 2024 15:49:46 +0100
+
+weston (14.0.1-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Update Homepage in debian/control.
+  * Drop libweston-noop-renderer-Check-shm_buffer-for-NULL.patch,
+      included in upstream release.
+
+ -- Dylan Aïssi <daissi@debian.org>  Tue, 22 Oct 2024 17:50:04 +0200
+
+weston (14.0.0-3) experimental; urgency=medium
+
+  * Enable tests (build time and autopkgtest) on armhf since
+      they are now successful.
+  * Bump minimum version of libdisplay-info-dev to 0.2.0,
+      it's required to get a better color management like HDR support.
+  * Move weston headers for plugin development into their
+      own package weston-dev. (Closes: #952530)
+  * cme fix dpkg-control
+
+ -- Dylan Aïssi <daissi@debian.org>  Thu, 17 Oct 2024 22:15:06 +0200
+
+weston (14.0.0-2) unstable; urgency=medium
+
+  [ Simon McVittie ]
+  * d/p/libweston-noop-renderer-Check-shm_buffer-for-NULL.patch:
+    Add proposed patch fixing a crash while running the gtk4 test suite.
+    Thanks to Jan Alexander Steffens (heftig) (Closes: #1081515)
+
+ -- Dylan Aïssi <daissi@debian.org>  Sun, 15 Sep 2024 14:20:35 +0200
+
+weston (14.0.0-1) unstable; urgency=medium
+
+  * Upload to unstable
+
+ -- Dylan Aïssi <daissi@debian.org>  Wed, 11 Sep 2024 11:30:18 +0200
+
+weston (14.0.0-1~exp2) experimental; urgency=medium
+
+  * Switch to freerdp3-dev from freerdp2-dev in Build-Deps
+
+ -- Dylan Aïssi <daissi@debian.org>  Mon, 09 Sep 2024 17:17:54 +0200
+
+weston (14.0.0-1~exp1) experimental; urgency=medium
+
+  * New upstream release.
+  * Drop Remove_upper_limit_of_required_neatvnc_version.patch,
+      no longer required.
+  * Add new Build-Deps: libdisplay-info-dev
+  * Bump SONAME to libweston-14-0
+  * Update symbols file
+  * Drop gentarball target in rules since we use upstream signed tarballs
+  * Drop packaging tweaks for architecture ia64
+  * Update minimum version of Build-Deps
+      - wayland-protocols >= 1.33
+
+ -- Dylan Aïssi <daissi@debian.org>  Wed, 04 Sep 2024 17:17:11 +0200
+
+weston (13.0.3-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Dylan Aïssi <daissi@debian.org>  Wed, 05 Jun 2024 17:25:19 +0200
+
+weston (13.0.1-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Update symbols file
+  * Standards-Version: 4.7.0 (no changes required)
+  * Don't install rdp-backend on ia64 (disabled)
+
+ -- Dylan Aïssi <daissi@debian.org>  Tue, 23 Apr 2024 21:47:40 +0200
+
+weston (13.0.0-5) unstable; urgency=medium
+
+  * Don't install disabled features on ia64 and sparc64
+  * Do not check the upper limit for neatvnc version (Closes: #1065816)
+
+ -- Dylan Aïssi <daissi@debian.org>  Mon, 11 Mar 2024 12:01:23 +0100
+
+weston (13.0.0-4) unstable; urgency=medium
+
+  * Fix syntax of non fatal tests
+
+ -- Dylan Aïssi <daissi@debian.org>  Tue, 27 Feb 2024 09:24:06 +0100
+
+weston (13.0.0-3) unstable; urgency=medium
+
+  * Retrict architectures where tests are run
+  * Disable backend-rdp for ia64 and backend-vnc for ia64 and sparc64,
+      because of Build-Deps not available.
+  * Mark Skip_xwayland_test.patch as 'Forwarded: not-needed'
+  * Switch from pkg-config to pkgconf
+
+ -- Dylan Aïssi <daissi@debian.org>  Mon, 26 Feb 2024 18:02:10 +0100
+
+weston (13.0.0-2) unstable; urgency=medium
+
+  * Mark libweston-13-dev as 'Multi-Arch: same'
+  * Install all manpages through weston.install
+  * Enable all hardening flags
+  * Add Build-Depends-Package field in symbols file
+  * Add debian/upstream/metadata
+  * Apply wrap-and-sort -a
+  * Skip xwayland test since it fails at build time and on the
+      autopkgtest infrastructure
+  * Use build time tests as autopkgtest until upstream tests can be installed
+
+ -- Dylan Aïssi <daissi@debian.org>  Thu, 22 Feb 2024 17:45:02 +0100
+
+weston (13.0.0-1) unstable; urgency=medium
+
+  * Upload to unstable
+
+ -- Dylan Aïssi <daissi@debian.org>  Mon, 22 Jan 2024 10:00:54 +0100
+
+weston (13.0.0-1~exp2) experimental; urgency=medium
+
+  * Drop outdated references to quilt
+  * Fix short description of libweston-13-dev
+  * Standards-Version: 4.6.2 (no changes required)
+  * Update debian/copyright
+  * Remove trailing whitespace in debian/changelog
+  * Update minimum version of Build-Deps
+      - libdrm-dev >= 2.4.108
+      - libinput-dev >= 1.2.0
+      - libwayland-dev >= 1.22.0
+      - meson >= 0.63.0
+      - wayland-protocols >= 1.31
+      - libneatvnc-dev >= 0.7.0
+  * Add debian/gbp.conf
+  * Use secure URI for homepage
+  * Switch to debhelper-compat 13
+  * Install some binaries in usr/libexec/ instead of usr/lib/*/
+  * Drop useless debian/tmp/ prefix
+  * weston suggests wayland-utils (Closes: #980995)
+  * Mark libweston-13-0 as 'Multi-Arch: same'
+  * Remove all references to weston-launch which was dropped
+      upstream with weston 11
+  * Drop dependency on adduser, no longer required since
+      weston.postinst was dropped
+  * Restrict Build-Deps on libneatvnc-dev for supported architectures
+
+ -- Dylan Aïssi <daissi@debian.org>  Fri, 19 Jan 2024 09:47:00 +0100
+
+weston (13.0.0-1~exp1) experimental; urgency=medium
+
+  [ Dylan Aïssi ]
+  * New upstream release. (Closes: #1054695)
+  * Bump SONAME to libweston-13-0
+  * Update symbols file
+  * Use format: 3.0 (quilt)
+  * Import Marius Vlad's key
+  * Add myself in Uploaders
+
+  [ Timo Aaltonen ]
+  * rules: Drop the workaround to drop includedir from
+      libweston-NN-protocols.pc. (LP: #1887301)
+
+ -- Dylan Aïssi <daissi@debian.org>  Wed, 17 Jan 2024 20:56:05 +0100
+
 weston (12.0.1-1) unstable; urgency=medium
 
   * New upstream release.
@@ -330,7 +560,7 @@ weston (1.5.93-1) experimental; urgency=medium
   * d/control:
     + bump wayland version requirement for build.
     + bump build depend on libinput-dev.
-  * Upload to experimental. 
+  * Upload to experimental.
 
  -- Hector Oron <zumbi@debian.org>  Fri, 12 Sep 2014 18:28:31 +0200
 

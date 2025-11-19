@@ -35,6 +35,14 @@ The RDP backend uses the following entries from
 Specifies the desktop redraw rate in Hz. If unspecified, the default is 60Hz. Changing
 this may be useful if you have a faster than 60Hz display, or if you want to reduce updates to
 reduce network traffic.
+.TP
+\fBtls\-key\fR=\fIfile\fR
+The file containing the key for doing TLS security. To have TLS security you also need
+to ship a file containing a certificate.
+.TP
+\fBtls\-cert\fR=\fIfile\fR
+The file containing the certificate for doing TLS security. To have TLS security you also need
+to ship a key file.
 
 
 .\" ***************************************************************
@@ -58,7 +66,7 @@ set, weston will force the client to resize to its own resolution.
 .TP
 \fB\-\-no-remotefx-codec
 The RemoteFX compression codec is enabled by default, but it may be necessary
-to disable it to work around incompatabilities between implementations. This
+to disable it to work around incompatibilities between implementations. This
 option may be removed in the future when all known issues are resolved.
 .TP
 \fB\-\-rdp4\-key\fR=\fIfile\fR

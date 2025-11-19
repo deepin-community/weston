@@ -38,6 +38,7 @@ fixture_setup(struct weston_test_harness *harness)
 	setup.backend = WESTON_BACKEND_DRM;
 	setup.renderer = WESTON_RENDERER_PIXMAN;
 	setup.shell = SHELL_TEST_DESKTOP;
+	setup.logging_scopes = "log,drm-backend";
 
 	weston_ini_setup(&setup,
 			 cfgln("[shell]"),
@@ -85,7 +86,7 @@ TEST(drm_writeback_screenshot) {
 	pixman_image_t *diffimg = NULL;
 	struct wl_surface *surface;
 	struct rectangle clip;
-	const char *fname;
+	char *fname;
 	bool match;
 	int frame;
 
@@ -113,6 +114,7 @@ TEST(drm_writeback_screenshot) {
 	screenshot = client_capture_output(client, client->output,
                                            WESTON_CAPTURE_V1_SOURCE_WRITEBACK);
 	assert(screenshot);
+	buffer_destroy(screenshot);
 
 	/* take another screenshot; this is important to ensure the
 	 * writeback state machine is working correctly */
@@ -126,6 +128,7 @@ TEST(drm_writeback_screenshot) {
 	testlog("Loading good reference image %s\n", fname);
 	reference = load_image_from_png(fname);
 	assert(reference);
+	free(fname);
 
 	/* check if they match - only the colored square matters, so the
 	 * clip is used to ignore the background */
@@ -137,13 +140,15 @@ TEST(drm_writeback_screenshot) {
 	testlog("Screenshot %s reference image\n", match? "equal to" : "different from");
 	if (!match) {
 		diffimg = visualize_image_difference(screenshot->image, reference, &clip, NULL);
-		fname = screenshot_output_filename("drm-writeback-screenshot-error", 0);
+		fname = output_filename_for_test_case("error", 0, "png");
 		write_image_as_png(diffimg, fname);
 		pixman_image_unref(diffimg);
+		free(fname);
 	}
 
 	pixman_image_unref(reference);
 	buffer_destroy(screenshot);
+	buffer_destroy(buffer);
 	client_destroy(client);
 
 	assert(match);

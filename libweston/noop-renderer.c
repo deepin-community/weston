@@ -62,14 +62,15 @@ noop_renderer_resize_output(struct weston_output *output,
 }
 
 static void
-noop_renderer_flush_damage(struct weston_surface *surface,
-			   struct weston_buffer *buffer)
+noop_renderer_flush_damage(struct weston_paint_node *pnode)
 {
 }
 
 static void
-noop_renderer_attach(struct weston_surface *es, struct weston_buffer *buffer)
+noop_renderer_attach(struct weston_paint_node *pnode)
 {
+	struct weston_surface *es = pnode->surface;
+	struct weston_buffer *buffer = es->buffer_ref.buffer;
 	struct noop_renderer *renderer =
 		wl_container_of(es->compositor->renderer, renderer, base);
 	struct wl_shm_buffer *shm_buffer;
@@ -93,8 +94,14 @@ noop_renderer_attach(struct weston_surface *es, struct weston_buffer *buffer)
 	}
 
 	shm_buffer = buffer->shm_buffer;
+	/* This can happen if a SHM wl_buffer gets destroyed before we attach,
+	 * because wayland-server just nukes the wl_shm_buffer from underneath
+	 * us. */
+	if (!shm_buffer)
+		return;
+
 	data = wl_shm_buffer_get_data(shm_buffer);
-	stride = wl_shm_buffer_get_stride(shm_buffer);
+	stride = buffer->stride;
 	height = buffer->height;
 	size = stride * height;
 
