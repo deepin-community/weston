@@ -1,1 +1,13 @@
-.pc/
+*.swp
+.*.sw?
+.sw?
+*.sublime-project
+*.sublime-workspace
+*~
+ctags
+cscope.out
+TAGS
+
+00*.patch
+
+build/

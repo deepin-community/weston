@@ -25,7 +25,6 @@
 
 #include "config.h"
 
-#include <assert.h>
 #include <errno.h>
 #include <stdint.h>
 #include <unistd.h>
@@ -39,6 +38,7 @@
 #include "shared/os-compatibility.h"
 #include "shared/helpers.h"
 #include "libweston-internal.h"
+#include "shared/weston-assert.h"
 #include "shared/weston-drm-fourcc.h"
 
 static void
@@ -85,6 +85,7 @@ params_add(struct wl_client *client,
 	   uint32_t modifier_lo)
 {
 	struct linux_dmabuf_buffer *buffer;
+	uint64_t modifier;
 
 	buffer = wl_resource_get_user_data(params_resource);
 	if (!buffer) {
@@ -95,8 +96,8 @@ params_add(struct wl_client *client,
 		return;
 	}
 
-	assert(buffer->params_resource == params_resource);
-	assert(!buffer->buffer_resource);
+	weston_assert_ptr_eq(buffer->compositor, buffer->params_resource, params_resource);
+	weston_assert_ptr_is_null(buffer->compositor, buffer->buffer_resource);
 
 	if (plane_idx >= MAX_DMABUF_PLANES) {
 		wl_resource_post_error(params_resource,
@@ -115,14 +116,23 @@ params_add(struct wl_client *client,
 		return;
 	}
 
+	if (wl_resource_get_version(params_resource) < ZWP_LINUX_DMABUF_V1_MODIFIER_SINCE_VERSION)
+		modifier = DRM_FORMAT_MOD_INVALID;
+	else
+		modifier = u64_from_u32s(modifier_hi, modifier_lo);
+
+	if (plane_idx > 0 && buffer->attributes.modifier != modifier) {
+		wl_resource_post_error(params_resource,
+			ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_INVALID_FORMAT,
+			"modifier mismatch between planes");
+		close(name_fd);
+		return;
+	}
+
+	buffer->attributes.modifier = modifier;
 	buffer->attributes.fd[plane_idx] = name_fd;
 	buffer->attributes.offset[plane_idx] = offset;
 	buffer->attributes.stride[plane_idx] = stride;
-
-	if (wl_resource_get_version(params_resource) < ZWP_LINUX_DMABUF_V1_MODIFIER_SINCE_VERSION)
-		buffer->attributes.modifier[plane_idx] = DRM_FORMAT_MOD_INVALID;
-	else
-		buffer->attributes.modifier[plane_idx] = u64_from_u32s(modifier_hi, modifier_lo);
 
 	buffer->attributes.n_planes++;
 }
@@ -144,8 +154,8 @@ destroy_linux_dmabuf_wl_buffer(struct wl_resource *resource)
 	struct linux_dmabuf_buffer *buffer;
 
 	buffer = wl_resource_get_user_data(resource);
-	assert(buffer->buffer_resource == resource);
-	assert(!buffer->params_resource);
+	weston_assert_ptr_eq(buffer->compositor, buffer->buffer_resource, resource);
+	weston_assert_ptr_is_null(buffer->compositor, buffer->params_resource);
 
 	if (buffer->user_data_destroy_func)
 		buffer->user_data_destroy_func(buffer);
@@ -174,8 +184,8 @@ params_create_common(struct wl_client *client,
 		return;
 	}
 
-	assert(buffer->params_resource == params_resource);
-	assert(!buffer->buffer_resource);
+	weston_assert_ptr_eq(buffer->compositor, buffer->params_resource, params_resource);
+	weston_assert_ptr_is_null(buffer->compositor, buffer->buffer_resource);
 
 	/* Switch the linux_dmabuf_buffer object from params resource to
 	 * eventually wl_buffer resource.
@@ -779,16 +789,18 @@ weston_dmabuf_feedback_send(struct weston_dmabuf_feedback *dmabuf_feedback,
  * is dynamic and can change throughout compositor's life. These changes results
  * in the need to resend the feedback events to clients.
  *
+ * @param compositor The weston compositor
  * @param dmabuf_feedback The weston_dmabuf_feedback object
  * @param format_table The dma-buf feedback formats table
  */
 WL_EXPORT void
-weston_dmabuf_feedback_send_all(struct weston_dmabuf_feedback *dmabuf_feedback,
+weston_dmabuf_feedback_send_all(struct weston_compositor *compositor,
+				struct weston_dmabuf_feedback *dmabuf_feedback,
 				struct weston_dmabuf_feedback_format_table *format_table)
 {
 	struct wl_resource *res;
 
-	assert(!wl_list_empty(&dmabuf_feedback->resource_list));
+	weston_assert_true(compositor, !wl_list_empty(&dmabuf_feedback->resource_list));
 	wl_resource_for_each(res, &dmabuf_feedback->resource_list)
 		weston_dmabuf_feedback_send(dmabuf_feedback,
 					    format_table, res, false);
@@ -941,11 +953,13 @@ err:
  * protocol interface, returns the linux_dmabuf_buffer object. This can
  * be used as a type check for a wl_buffer.
  *
+ * \param compositor The weston compositor.
  * \param resource A wl_buffer resource.
  * \return The linux_dmabuf_buffer if it exists, or NULL otherwise.
  */
 WL_EXPORT struct linux_dmabuf_buffer *
-linux_dmabuf_buffer_get(struct wl_resource *resource)
+linux_dmabuf_buffer_get(struct weston_compositor *compositor,
+			struct wl_resource *resource)
 {
 	struct linux_dmabuf_buffer *buffer;
 
@@ -957,9 +971,9 @@ linux_dmabuf_buffer_get(struct wl_resource *resource)
 		return NULL;
 
 	buffer = wl_resource_get_user_data(resource);
-	assert(buffer);
-	assert(!buffer->params_resource);
-	assert(buffer->buffer_resource == resource);
+	weston_assert_ptr(compositor, buffer);
+	weston_assert_ptr_is_null(compositor, buffer->params_resource);
+	weston_assert_ptr_eq(compositor, buffer->buffer_resource, resource);
 
 	return buffer;
 }
@@ -986,7 +1000,7 @@ linux_dmabuf_buffer_set_user_data(struct linux_dmabuf_buffer *buffer,
 				  void *data,
 				  dmabuf_user_data_destroy_func func)
 {
-	assert(data == NULL || buffer->user_data == NULL);
+	weston_assert_true(buffer->compositor, data == NULL || buffer->user_data == NULL);
 
 	buffer->user_data = data;
 	buffer->user_data_destroy_func = func;
@@ -1044,7 +1058,7 @@ bind_linux_dmabuf(struct wl_client *client,
 
 	/* If we got here, it means that the renderer is able to import dma-buf
 	 * buffers, and so it must have get_supported_formats() set. */
-	assert(compositor->renderer->get_supported_formats != NULL);
+	weston_assert_ptr(compositor, compositor->renderer->get_supported_formats);
 	supported_formats = compositor->renderer->get_supported_formats(compositor);
 
 	wl_array_for_each(fmt, &supported_formats->arr) {
@@ -1084,8 +1098,8 @@ linux_dmabuf_setup(struct weston_compositor *compositor)
 
 	/* If we were able to create the default dma-buf feedback for the
 	 * compositor, that means that we are able to advertise dma-buf feedback
-	 * events. In such case we support the version 4 of the protocol. */
-	max_version = compositor->default_dmabuf_feedback ? 4 : 3;
+	 * events. In such case we support the version >=4 of the protocol. */
+	max_version = compositor->default_dmabuf_feedback ? 5 : 3;
 
 	if (!wl_global_create(compositor->wl_display,
 			      &zwp_linux_dmabuf_v1_interface,
@@ -1119,12 +1133,12 @@ linux_dmabuf_buffer_send_server_error(struct linux_dmabuf_buffer *buffer,
 	struct wl_resource *display_resource;
 	uint32_t id;
 
-	assert(buffer->buffer_resource);
+	weston_assert_ptr(buffer->compositor, buffer->buffer_resource);
 	id = wl_resource_get_id(buffer->buffer_resource);
 	client = wl_resource_get_client(buffer->buffer_resource);
 	display_resource = wl_client_get_object(client, 1);
 
-	assert(display_resource);
+	weston_assert_ptr(buffer->compositor, display_resource);
 	wl_resource_post_error(display_resource,
 			       WL_DISPLAY_ERROR_INVALID_OBJECT,
 			       "linux_dmabuf server error with "

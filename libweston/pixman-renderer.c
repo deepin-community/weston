@@ -37,7 +37,6 @@
 #include "pixel-formats.h"
 #include "output-capture.h"
 #include "shared/helpers.h"
-#include "shared/signal.h"
 #include "shared/weston-drm-fourcc.h"
 #include "shared/xalloc.h"
 
@@ -81,12 +80,17 @@ struct pixman_renderer {
 	struct wl_signal destroy_signal;
 };
 
+static inline struct pixman_renderbuffer *
+to_pixman_renderbuffer(struct weston_renderbuffer *renderbuffer)
+{
+	return container_of(renderbuffer, struct pixman_renderbuffer, base);
+}
+
 static pixman_image_t *
 pixman_renderer_renderbuffer_get_image(struct weston_renderbuffer *renderbuffer)
 {
-	struct pixman_renderbuffer *rb;
+	struct pixman_renderbuffer *rb = to_pixman_renderbuffer(renderbuffer);
 
-	rb = container_of(renderbuffer, struct pixman_renderbuffer, base);
 	return rb->image;
 }
 
@@ -509,8 +513,7 @@ draw_paint_node(struct weston_paint_node *pnode,
 
 	pixman_region32_init(&repaint);
 	pixman_region32_intersect(&repaint,
-				  &pnode->view->transform.boundingbox, damage);
-	pixman_region32_subtract(&repaint, &repaint, &pnode->view->clip);
+				  &pnode->visible, damage);
 
 	if (!pixman_region32_not_empty(&repaint))
 		goto out;
@@ -541,12 +544,11 @@ out:
 static void
 repaint_surfaces(struct weston_output *output, pixman_region32_t *damage)
 {
-	struct weston_compositor *compositor = output->compositor;
 	struct weston_paint_node *pnode;
 
 	wl_list_for_each_reverse(pnode, &output->paint_node_z_order_list,
 				 z_order_link) {
-		if (pnode->view->plane == &compositor->primary_plane)
+		if (pnode->plane == &output->primary_plane)
 			draw_paint_node(pnode, damage);
 	}
 }
@@ -592,7 +594,7 @@ pixman_renderer_do_capture(struct weston_buffer *into, pixman_image_t *from)
 	dest = pixman_image_create_bits(into->pixel_format->pixman_format,
 					into->width, into->height,
 					wl_shm_buffer_get_data(shm),
-					wl_shm_buffer_get_stride(shm));
+					into->stride);
 	abort_oom_if_null(dest);
 
 	pixman_image_composite32(PIXMAN_OP_SRC, from, NULL /* mask */, dest,
@@ -649,7 +651,7 @@ pixman_renderer_repaint_output(struct weston_output *output,
 
 	assert(renderbuffer);
 
-	rb = container_of(renderbuffer, struct pixman_renderbuffer, base);
+	rb = to_pixman_renderbuffer(renderbuffer);
 
 	pixman_renderer_output_set_buffer(output, rb->image);
 
@@ -686,8 +688,7 @@ pixman_renderer_repaint_output(struct weston_output *output,
 }
 
 static void
-pixman_renderer_flush_damage(struct weston_surface *surface,
-			     struct weston_buffer *buffer)
+pixman_renderer_flush_damage(struct weston_paint_node *pnode)
 {
 	/* No-op for pixman renderer */
 }
@@ -729,8 +730,10 @@ pixman_renderer_surface_set_color(struct weston_surface *es,
 }
 
 static void
-pixman_renderer_attach(struct weston_surface *es, struct weston_buffer *buffer)
+pixman_renderer_attach(struct weston_paint_node *pnode)
 {
+	struct weston_surface *es = pnode->surface;
+	struct weston_buffer *buffer = pnode->surface->buffer_ref.buffer;
 	struct pixman_surface_state *ps = get_surface_state(es);
 	struct wl_shm_buffer *shm_buffer;
 	const struct pixel_format_info *pixel_info;
@@ -775,6 +778,11 @@ pixman_renderer_attach(struct weston_surface *es, struct weston_buffer *buffer)
 	}
 
 	shm_buffer = buffer->shm_buffer;
+	/* This can happen if a SHM wl_buffer gets destroyed before we attach,
+	 * because wayland-server just nukes the wl_shm_buffer from underneath
+	 * us. */
+	if (!shm_buffer)
+		return;
 
 	pixel_info = pixel_format_get_info_shm(wl_shm_buffer_get_format(shm_buffer));
 	if (!pixel_info || !pixman_format_supported_source(pixel_info->pixman_format)) {
@@ -791,7 +799,7 @@ pixman_renderer_attach(struct weston_surface *es, struct weston_buffer *buffer)
 	ps->image = pixman_image_create_bits(pixel_info->pixman_format,
 		buffer->width, buffer->height,
 		wl_shm_buffer_get_data(shm_buffer),
-		wl_shm_buffer_get_stride(shm_buffer));
+		buffer->stride);
 
 	ps->buffer_destroy_listener.notify =
 		buffer_state_handle_buffer_destroy;
@@ -1208,9 +1216,8 @@ pixman_renderer_create_image(struct weston_output *output,
 static void
 pixman_renderer_renderbuffer_destroy(struct weston_renderbuffer *renderbuffer)
 {
-	struct pixman_renderbuffer *rb;
+	struct pixman_renderbuffer *rb = to_pixman_renderbuffer(renderbuffer);
 
-	rb = container_of(renderbuffer, struct pixman_renderbuffer, base);
 	pixman_image_unref(rb->image);
 	pixman_region32_fini(&rb->base.damage);
 	free(rb);

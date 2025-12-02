@@ -50,7 +50,7 @@
  *
  * 4/ According properties, set transformation by using weston_matrix and
  *    weston_view per ivi_surfaces and ivi_layers in while loop.
- * 5/ Set damage and trigger transform by using weston_view_geometry_dirty.
+ * 5/ Set damage and trigger transform by using weston_view_add_transform
  * 6/ Schedule repaint for each view by using weston_view_schedule_repaint.
  * 7/ Notify update of properties.
  *
@@ -61,7 +61,7 @@
 #include <assert.h>
 #include <stdint.h>
 
-#include "compositor/weston.h"
+#include "frontend/weston.h"
 #include <libweston/libweston.h>
 #include "ivi-shell.h"
 #include "ivi-layout-export.h"
@@ -70,7 +70,6 @@
 
 #include "shared/helpers.h"
 #include "shared/os-compatibility.h"
-#include "shared/signal.h"
 #include "shared/xalloc.h"
 
 #define max(a, b) ((a) > (b) ? (a) : (b))
@@ -149,7 +148,7 @@ ivi_view_is_rendered(struct ivi_layout_view *view)
 static void
 ivi_view_destroy(struct ivi_layout_view *ivi_view)
 {
-	wl_list_remove(&ivi_view->transform.link);
+	weston_view_remove_transform(ivi_view->view, &ivi_view->transform);
 	wl_list_remove(&ivi_view->link);
 	wl_list_remove(&ivi_view->surf_link);
 	wl_list_remove(&ivi_view->pending_link);
@@ -370,7 +369,7 @@ update_opacity(struct ivi_layout_layer *ivilayer,
 	double layer_alpha = wl_fixed_to_double(ivilayer->prop.opacity);
 	double surf_alpha  = wl_fixed_to_double(ivisurf->prop.opacity);
 
-	view->alpha = layer_alpha * surf_alpha;
+	weston_view_set_alpha(view, layer_alpha * surf_alpha);
 }
 
 static void
@@ -546,13 +545,13 @@ calc_surface_to_global_matrix_and_mask_to_weston_surface(
 						     lp->dest_y,
 						     lp->dest_width,
 						     lp->dest_height };
-	struct ivi_rectangle screen_dest_rect =    { output->x,
-						     output->y,
+	struct ivi_rectangle screen_dest_rect =    { output->pos.c.x,
+						     output->pos.c.y,
 						     output->width,
 						     output->height };
 	struct ivi_rectangle layer_dest_rect_in_global =
-						   { lp->dest_x + output->x,
-						     lp->dest_y + output->y,
+						   { lp->dest_x + output->pos.c.x,
+						     lp->dest_y + output->pos.c.y,
 						     lp->dest_width,
 						     lp->dest_height };
 	struct ivi_rectangle layer_dest_rect_in_global_intersected;
@@ -569,7 +568,7 @@ calc_surface_to_global_matrix_and_mask_to_weston_surface(
 	calc_transformation_matrix(&surface_source_rect, &surface_dest_rect, m);
 	calc_transformation_matrix(&layer_source_rect, &layer_dest_rect, m);
 
-	weston_matrix_translate(m, output->x, output->y, 0.0f);
+	weston_matrix_translate(m, output->pos.c.x, output->pos.c.y, 0.0f);
 
 	/*
 	 * destination rectangle of layer in multi screens coordinate
@@ -611,24 +610,19 @@ update_prop(struct ivi_layout_view *ivi_view)
 	}
 
 	if (can_calc) {
-		wl_list_remove(&ivi_view->transform.link);
 		weston_matrix_init(&ivi_view->transform.matrix);
 
 		calc_surface_to_global_matrix_and_mask_to_weston_surface(
 			iviscrn, ivilayer, ivisurf, &ivi_view->transform.matrix, &r);
 
 		weston_view_set_mask(ivi_view->view, r.x, r.y, r.width, r.height);
-		wl_list_insert(&ivi_view->view->geometry.transformation_list,
-			       &ivi_view->transform.link);
-
+		weston_view_add_transform(ivi_view->view,
+					  &ivi_view->view->geometry.transformation_list,
+					  &ivi_view->transform);
 		weston_view_set_transform_parent(ivi_view->view, NULL);
-		weston_view_geometry_dirty(ivi_view->view);
-		weston_view_update_transform(ivi_view->view);
 	}
 
 	ivisurf->update_count++;
-
-	weston_view_schedule_repaint(ivi_view->view);
 }
 
 static bool
@@ -850,26 +844,22 @@ build_view_list(struct ivi_layout *layout)
 	 */
 	wl_list_for_each(ivi_view, &layout->view_list, link) {
 		if (!ivi_view_is_mapped(ivi_view))
-			weston_view_unmap(ivi_view->view);
+			weston_view_move_to_layer(ivi_view->view, NULL);
 	}
-
-	/* Clear view list of layout ivi_layer */
-	wl_list_init(&layout->layout_layer.view_list.link);
 
 	wl_list_for_each(iviscrn, &layout->screen_list, link) {
 		wl_list_for_each(ivilayer, &iviscrn->order.layer_list, order.link) {
-			if (ivilayer->prop.visibility == false)
-				continue;
-
 			wl_list_for_each(ivi_view, &ivilayer->order.view_list, order_link) {
-				if (ivi_view->ivisurf->prop.visibility == false)
+				if (ivilayer->prop.visibility == false ||
+				    ivi_view->ivisurf->prop.visibility == false) {
+					weston_view_move_to_layer(ivi_view->view,
+								  NULL);
 					continue;
-
-				weston_layer_entry_insert(&layout->layout_layer.view_list,
-							  &ivi_view->view->layer_link);
+				}
 
 				weston_surface_map(ivi_view->ivisurf->surface);
-				ivi_view->view->is_mapped = true;
+				weston_view_move_to_layer(ivi_view->view,
+							  &layout->layout_layer.view_list);
 			}
 		}
 	}
@@ -1786,6 +1776,67 @@ ivi_layout_surface_set_id(struct ivi_layout_surface *ivisurf,
 }
 
 static void
+deactivate_current_surface(struct weston_seat *seat)
+{
+	struct ivi_layout_surface *ivisurf =
+		shell_get_focused_ivi_layout_surface(seat);
+	struct weston_desktop_surface *desktop_surface;
+
+	if (!ivisurf)
+		return;
+
+	shell_set_focused_ivi_layout_surface(NULL, seat);
+	desktop_surface = ivisurf->weston_desktop_surface;
+	if (--ivisurf->focus_count == 0 && desktop_surface)
+		weston_desktop_surface_set_activated(desktop_surface, false);
+}
+
+static void
+surface_activate(struct ivi_layout_surface *ivisurf, struct weston_seat *seat)
+{
+	struct weston_desktop_surface *dsurf = ivisurf->weston_desktop_surface;
+
+	deactivate_current_surface(seat);
+
+	shell_set_focused_ivi_layout_surface(ivisurf, seat);
+	if (ivisurf->focus_count++ == 0 && dsurf)
+		weston_desktop_surface_set_activated(dsurf, true);
+}
+
+static void
+ivi_layout_surface_activate(struct ivi_layout_surface *ivisurf)
+{
+	struct weston_seat *seat;
+
+	assert(ivisurf->ivi_view);
+
+	wl_list_for_each(seat, &ivisurf->surface->compositor->seat_list, link) {
+		weston_view_activate_input(ivisurf->ivi_view->view, seat,
+					   WESTON_ACTIVATE_FLAG_NONE);
+		surface_activate(ivisurf, seat);
+	}
+}
+
+static bool
+ivi_layout_surface_is_active(struct ivi_layout_surface *ivisurf)
+{
+	assert(ivisurf);
+
+	return (ivisurf->focus_count > 0);
+}
+
+void
+ivi_layout_surface_activate_with_seat(struct ivi_layout_surface *ivisurf,
+				      struct weston_seat *seat,
+				      uint32_t activate_flags)
+{
+	weston_view_activate_input(ivisurf->ivi_view->view,
+				   seat, activate_flags);
+
+	surface_activate(ivisurf, seat);
+}
+
+static void
 ivi_layout_surface_set_transition(struct ivi_layout_surface *ivisurf,
 				  enum ivi_layout_transition_type type,
 				  uint32_t duration)
@@ -1886,7 +1937,7 @@ ivi_layout_input_panel_surface_create(struct weston_surface *wl_surface)
 	ivisurf = surface_create(wl_surface, IVI_INVALID_ID,
 				 IVI_LAYOUT_SURFACE_TYPE_INPUT_PANEL);
 
-	weston_signal_emit_mutable(&layout->surface_notification.created,
+	wl_signal_emit_mutable(&layout->surface_notification.created,
 				   ivisurf);
 
 	return ivisurf;
@@ -1898,7 +1949,7 @@ ivi_layout_input_panel_surface_configure(struct ivi_layout_surface *ivisurf,
 {
 	struct ivi_layout *layout = get_instance();
 
-	weston_signal_emit_mutable(&layout->input_panel_notification.configure_changed,
+	wl_signal_emit_mutable(&layout->input_panel_notification.configure_changed,
 				   ivisurf);
 }
 
@@ -1925,7 +1976,7 @@ ivi_layout_show_input_panel(struct ivi_layout_surface *ivisurf,
 	};
 	layout->text_input.ivisurf = target_ivisurf;
 
-	weston_signal_emit_mutable(&layout->input_panel_notification.show,
+	wl_signal_emit_mutable(&layout->input_panel_notification.show,
 				   &state);
 }
 
@@ -1934,7 +1985,7 @@ ivi_layout_hide_input_panel(struct ivi_layout_surface *ivisurf)
 {
 	struct ivi_layout *layout = get_instance();
 
-	weston_signal_emit_mutable(&layout->input_panel_notification.hide,
+	wl_signal_emit_mutable(&layout->input_panel_notification.hide,
 				   ivisurf);
 }
 
@@ -1950,7 +2001,7 @@ ivi_layout_update_input_panel(struct ivi_layout_surface *ivisurf,
 		.cursor_rectangle = layout->text_input.cursor_rectangle
 	};
 
-	weston_signal_emit_mutable(&layout->input_panel_notification.update,
+	wl_signal_emit_mutable(&layout->input_panel_notification.update,
 				   &state);
 }
 
@@ -2038,7 +2089,7 @@ ivi_layout_ivi_shell_destroy(void)
 	struct ivi_layout *layout = get_instance();
 
 	/* emit callback which is set by ivi-layout api user */
-	weston_signal_emit_mutable(&layout->shell_notification.destroy_signal, NULL);
+	wl_signal_emit_mutable(&layout->shell_notification.destroy_signal, NULL);
 }
 
 static struct ivi_layout_interface ivi_layout_interface;
@@ -2132,6 +2183,8 @@ static struct ivi_layout_interface ivi_layout_interface = {
 	.surface_set_transition			= ivi_layout_surface_set_transition,
 	.surface_set_transition_duration	= ivi_layout_surface_set_transition_duration,
 	.surface_set_id				= ivi_layout_surface_set_id,
+	.surface_activate			= ivi_layout_surface_activate,
+	.surface_is_active			= ivi_layout_surface_is_active,
 
 	/**
 	 * layer controller interfaces
