@@ -201,7 +201,7 @@ data_offer_set_actions(struct wl_client *client,
 
 	if (preferred_action &&
 	    (!(preferred_action & dnd_actions) ||
-	     __builtin_popcount(preferred_action) > 1)) {
+	     bitcount32(preferred_action) > 1)) {
 		wl_resource_post_error(offer->resource,
 				       WL_DATA_OFFER_ERROR_INVALID_ACTION,
 				       "invalid action %x", preferred_action);
@@ -415,40 +415,34 @@ drag_surface_configure(struct weston_drag *drag,
 		       struct weston_coord_surface new_origin)
 {
 	struct weston_layer_entry *list;
-	float fx, fy;
+	struct weston_coord_global pos;
 
 	assert((pointer != NULL && touch == NULL) ||
 			(pointer == NULL && touch != NULL));
 
 	if (!weston_surface_is_mapped(es) && weston_surface_has_content(es)) {
+		weston_surface_map(es);
+		pixman_region32_clear(&es->pending.input);
+
 		if (pointer && pointer->sprite &&
 			weston_view_is_mapped(pointer->sprite))
 			list = &pointer->sprite->layer_link;
 		else
 			list = &es->compositor->cursor_layer.view_list;
 
-		weston_layer_entry_remove(&drag->icon->layer_link);
-		weston_layer_entry_insert(list, &drag->icon->layer_link);
-		weston_view_update_transform(drag->icon);
-		pixman_region32_clear(&es->pending.input);
-		weston_surface_map(es);
-		drag->icon->is_mapped = true;
+		weston_view_move_to_layer(drag->icon, list);
 	}
 
-	assert(drag->offset.coordinate_space_id &&
-	       drag->offset.coordinate_space_id == new_origin.coordinate_space_id);
-	drag->offset.c = weston_coord_add(drag->offset.c, new_origin.c);
+	drag->offset = weston_coord_surface_add(drag->offset, new_origin);
 
 	/* init to 0 for avoiding a compile warning */
-	fx = fy = 0;
-	if (pointer) {
-		fx = pointer->pos.c.x + drag->offset.c.x;
-		fy = pointer->pos.c.y + drag->offset.c.y;
-	} else if (touch) {
-		fx = wl_fixed_to_double(touch->grab_x) + drag->offset.c.x;
-		fy = wl_fixed_to_double(touch->grab_y) + drag->offset.c.y;
-	}
-	weston_view_set_position(drag->icon, fx, fy);
+	pos.c = weston_coord(0, 0);
+	if (pointer)
+		pos = pointer->pos;
+	else if (touch)
+		pos = touch->grab_pos;
+
+	weston_view_set_position_with_offset(drag->icon, pos, drag->offset);
 }
 
 static int
@@ -617,16 +611,14 @@ drag_grab_motion(struct weston_pointer_grab *grab,
 	struct weston_pointer_drag *drag =
 		container_of(grab, struct weston_pointer_drag, grab);
 	struct weston_pointer *pointer = drag->grab.pointer;
-	float fx, fy;
 	uint32_t msecs;
 
 	weston_pointer_move(pointer, event);
 
 	if (drag->base.icon) {
-		fx = pointer->pos.c.x + drag->base.offset.c.x;
-		fy = pointer->pos.c.y + drag->base.offset.c.y;
-		weston_view_set_position(drag->base.icon, fx, fy);
-		weston_view_schedule_repaint(drag->base.icon);
+		weston_view_set_position_with_offset(drag->base.icon,
+						     pointer->pos,
+						     drag->base.offset);
 	}
 
 	if (drag->base.focus_resource) {
@@ -757,7 +749,7 @@ static const struct weston_pointer_grab_interface pointer_drag_grab_interface = 
 static void
 drag_grab_touch_down(struct weston_touch_grab *grab,
 		     const struct timespec *time, int touch_id,
-		     wl_fixed_t sx, wl_fixed_t sy)
+		     struct weston_coord_global c)
 {
 }
 
@@ -798,46 +790,39 @@ static void
 drag_grab_touch_focus(struct weston_touch_drag *drag)
 {
 	struct weston_touch *touch = drag->grab.touch;
-	struct weston_coord_global pos;
 
-	pos.c = weston_coord_from_fixed(touch->grab_x, touch->grab_y);
-	drag_grab_focus_internal(&drag->base, touch->seat, pos);
+	drag_grab_focus_internal(&drag->base, touch->seat, touch->grab_pos);
 }
 
 static void
 drag_grab_touch_motion(struct weston_touch_grab *grab,
 		       const struct timespec *time,
-		       int touch_id, wl_fixed_t x, wl_fixed_t y)
+		       int touch_id, struct weston_coord_global unused)
 {
 	struct weston_touch_drag *touch_drag =
 		container_of(grab, struct weston_touch_drag, grab);
 	struct weston_touch *touch = grab->touch;
-	float fx, fy;
 	uint32_t msecs;
 
 	if (touch_id != touch->grab_touch_id)
 		return;
 
 	drag_grab_touch_focus(touch_drag);
-	if (touch_drag->base.icon) {
-		fx = wl_fixed_to_double(touch->grab_x) +
-		     touch_drag->base.offset.c.x;
-		fy = wl_fixed_to_double(touch->grab_y) +
-		     touch_drag->base.offset.c.y;
-		weston_view_set_position(touch_drag->base.icon, fx, fy);
-		weston_view_schedule_repaint(touch_drag->base.icon);
-	}
+	if (touch_drag->base.icon)
+		weston_view_set_position_with_offset(touch_drag->base.icon,
+						     touch->grab_pos,
+						     touch_drag->base.offset);
 
 	if (touch_drag->base.focus_resource) {
-		struct weston_coord_global tmp_g;
-		struct weston_coord_surface c;
+		struct weston_coord_surface surf_pos;
 
-		tmp_g.c = weston_coord_from_fixed(touch->grab_x, touch->grab_y);
 		msecs = timespec_to_msec(time);
-		c = weston_coord_global_to_surface(touch_drag->base.focus, tmp_g);
+		surf_pos = weston_coord_global_to_surface(touch_drag->base.focus,
+							  touch->grab_pos);
 		wl_data_device_send_motion(touch_drag->base.focus_resource,
-					   msecs, wl_fixed_from_double(c.c.x),
-					   wl_fixed_from_double(c.c.y));
+					   msecs,
+					   wl_fixed_from_double(surf_pos.c.x),
+					   wl_fixed_from_double(surf_pos.c.y));
 	}
 }
 
@@ -972,6 +957,7 @@ weston_pointer_start_drag(struct weston_pointer *pointer,
 		icon->committed_private = drag;
 		weston_surface_set_label_func(icon,
 					pointer_drag_surface_get_label);
+		drag->base.offset = weston_coord_surface(0, 0, icon);
 	} else {
 		drag->base.icon = NULL;
 	}
@@ -990,7 +976,6 @@ weston_pointer_start_drag(struct weston_pointer *pointer,
 	if (keyboard)
 		weston_keyboard_start_grab(keyboard, &drag->base.keyboard_grab);
 
-	drag->base.offset = weston_coord_surface(0, 0, icon);
 	return 0;
 }
 
@@ -1036,6 +1021,7 @@ weston_touch_start_drag(struct weston_touch *touch,
 		icon->committed_private = drag;
 		weston_surface_set_label_func(icon,
 					touch_drag_surface_get_label);
+		drag->base.offset = weston_coord_surface(0, 0, icon);
 	} else {
 		drag->base.icon = NULL;
 	}
@@ -1055,7 +1041,6 @@ weston_touch_start_drag(struct weston_touch *touch,
 
 	drag_grab_touch_focus(drag);
 
-	drag->base.offset = weston_coord_surface(0, 0, icon);
 	return 0;
 }
 

@@ -32,9 +32,36 @@
 #ifndef LIBWESTON_BACKEND_INTERNAL_H
 #define LIBWESTON_BACKEND_INTERNAL_H
 
+#define WESTON_PRESENTATION_CLOCKS_SOFTWARE \
+	((1 << CLOCK_MONOTONIC) | \
+	 (1 << CLOCK_MONOTONIC_RAW) | \
+	 (1 << CLOCK_MONOTONIC_COARSE))
+
 struct weston_hdr_metadata_type1;
 
 struct weston_backend {
+	struct wl_list link; /**< in weston_compositor::backend_list */
+
+	/** Bitfield of supported presentation clocks
+	 *
+	 * Bit positions correspond to system clock IDs.
+	 */
+	unsigned int supported_presentation_clocks;
+
+	/** True if the output will be repainted in the currently active
+	 *  repaint handler.
+	 *
+	 * This will be set if the same flag for any output of this backend is
+	 * also true. It is used to determine if repaint_begin() and
+	 * repaint_flush()/repaint_cancel() need to be called.
+	 */
+	bool will_repaint;
+
+	/** Prepare for compositor shutdown (optional)
+	 *
+	 * This will be called before weston_compositor_shutdown()
+	 */
+	void (*shutdown)(struct weston_backend *backend);
 	void (*destroy)(struct weston_backend *backend);
 
 	/** Begin a repaint sequence
@@ -62,7 +89,7 @@ struct weston_backend {
 	 * Called on successful completion of a repaint sequence; see
 	 * repaint_begin.
 	 */
-	int (*repaint_flush)(struct weston_backend *backend);
+	void (*repaint_flush)(struct weston_backend *backend);
 
 	/** Allocate a new output
 	 *
@@ -102,6 +129,11 @@ struct weston_backend {
 	 */
 	bool (*can_scanout_dmabuf)(struct weston_backend *backend,
 				   struct linux_dmabuf_buffer *buffer);
+
+	/** Identifies a particular backend_type from one
+	 * defined in weston_compositor_backend.
+	 */
+	enum weston_compositor_backend backend_type;
 };
 
 /* weston_head */
@@ -141,6 +173,10 @@ void
 weston_head_set_supported_eotf_mask(struct weston_head *head,
 				    uint32_t eotf_mask);
 
+void
+weston_head_set_supported_colorimetry_mask(struct weston_head *head,
+					   uint32_t colorimetry_mask);
+
 /* weston_output */
 
 void
@@ -177,6 +213,12 @@ weston_region_global_to_output(pixman_region32_t *dst,
 
 const struct weston_hdr_metadata_type1 *
 weston_output_get_hdr_metadata_type1(const struct weston_output *output);
+
+void
+weston_output_arm_frame_timer(struct weston_output *output,
+			      struct wl_event_source *frame_timer);
+void
+weston_output_finish_frame_from_timer(struct weston_output *output);
 
 /* weston_seat */
 
@@ -297,5 +339,14 @@ notify_tablet_tool_down(struct weston_tablet_tool *tool,
 void
 notify_tablet_tool_frame(struct weston_tablet_tool *tool,
 			 const struct timespec *time);
+
+bool
+weston_output_flush_damage_for_plane(struct weston_output *output,
+				     struct weston_plane *plane,
+				     pixman_region32_t *damage);
+
+void
+weston_output_flush_damage_for_primary_plane(struct weston_output *output,
+					     pixman_region32_t *damage);
 
 #endif

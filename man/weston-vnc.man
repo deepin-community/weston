@@ -33,6 +33,27 @@ The VNC backend uses the following entries from
 Specifies the desktop redraw rate in Hz. If unspecified, the default is 60Hz. Changing
 this may be useful if you have a faster than 60Hz display, or if you want to reduce updates to
 reduce network traffic.
+.TP
+\fBtls\-key\fR=\fIfile\fR
+The file containing the key for doing TLS security. To have TLS security you also need
+to ship a file containing a certificate.
+.TP
+\fBtls\-cert\fR=\fIfile\fR
+The file containing the certificate for doing TLS security. To have TLS security you also need
+to ship a key file.
+
+.SS Section output
+.TP
+\fBname\fR=\fIvnc\fR
+The name
+.BR vnc
+is used to identify the VNC output.
+.TP
+\fBmode\fR=\fIwidth\fBx\fIheight\fR
+Specifies the (initial) size for the output.
+.TP
+\fBresizeable\fR=\fIboolean\fR
+Specifies whether the VNC client is allowed to resize the output.
 
 .\" ***************************************************************
 .SH OPTIONS
@@ -40,6 +61,10 @@ reduce network traffic.
 When the VNC backend is loaded,
 .B weston
 will understand the following additional command line options.
+.TP
+.B \-\-address\fR=\fIaddress\fR
+The IP address on which the VNC backend will listen for VNC connections. By
+default it listens on 0.0.0.0.
 .TP
 .B \-\-width\fR=\fIwidth\fR
 The width of the framebuffer. It defaults to 640.
@@ -57,6 +82,10 @@ to ship a file containing a certificate.
 \fB\-\-vnc\-tls\-cert\fR=\fIfile\fR
 The file containing the certificate for doing TLS security. To have TLS security you also need
 to ship a key file.
+.TP
+\fB\-\-disable\-transport\-layer\-security
+Disable Transport Layer Security. If specified, VNC will be enabled with password-only
+authentication. This option is not recommended, as it creates security risk.
 
 
 .\" ***************************************************************

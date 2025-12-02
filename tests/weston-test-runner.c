@@ -150,7 +150,8 @@ find_test(const char *name)
 }
 
 static enum test_result_code
-run_test(int fixture_nr, const struct weston_test_entry *t, void *data,
+run_test(struct wet_testsuite_data *suite_data, int fixture_nr,
+	 const struct weston_test_entry *t, void *data,
 	 int iteration)
 {
 	struct weston_test_run_info info;
@@ -165,7 +166,7 @@ run_test(int fixture_nr, const struct weston_test_entry *t, void *data,
 	info.fixture_nr = fixture_nr;
 
 	test_run_info_ = &info;
-	t->run(data);
+	t->run(suite_data, data);
 	test_run_info_ = NULL;
 
 	/*
@@ -210,6 +211,22 @@ struct weston_test_harness {
 
 	struct wet_testsuite_data data;
 };
+
+/** Get the current fixture number from test harness
+ *
+ * \param harness The test harness.
+ *
+ * Similar to get_test_fixture_index(), but get the fixture number (index + 1)
+ * directly from the test harness. Can be called from fixture_setup() functions.
+ *
+ * \sa DECLARE_FIXTURE_SETUP(), DECLARE_FIXTURE_SETUP_WITH_ARG()
+ * \ingroup testharness
+ */
+int
+get_test_fixture_number_from_harness(struct weston_test_harness *harness)
+{
+	return harness->data.fixture_iteration + 1;
+}
 
 typedef void (*weston_test_cb)(struct wet_testsuite_data *suite_data,
 			       const struct weston_test_entry *t,
@@ -277,10 +294,11 @@ run_case(struct wet_testsuite_data *suite_data,
 		suite_data->fixture_name, t->name, iteration_nr);
 
 	if (suite_data->type == TEST_TYPE_PLUGIN) {
-		ret = run_test(fixture_nr, t, suite_data->compositor,
+		ret = run_test(suite_data, fixture_nr, t, suite_data->compositor,
 			       iteration);
 	} else {
-		ret = run_test(fixture_nr, t, (void *)test_data, iteration);
+		ret = run_test(suite_data, fixture_nr, t, (void *)test_data,
+			       iteration);
 	}
 
 	switch (ret) {

@@ -30,7 +30,6 @@
 
 #include <libweston/libweston.h>
 #include "libweston-internal.h"
-#include "compositor/weston.h"
 #include "weston-test-runner.h"
 #include "weston-test-fixture-compositor.h"
 
@@ -60,7 +59,8 @@ PLUGIN_TEST(surface_to_from_global)
 	assert(view);
 	surface->width = 50;
 	surface->height = 50;
-	weston_view_set_position(view, 5, 10);
+	cg.c = weston_coord(5, 10);
+	weston_view_set_position(view, cg);
 	weston_view_update_transform(view);
 
 	cs = weston_coord_surface(33, 22, surface);

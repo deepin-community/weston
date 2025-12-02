@@ -82,18 +82,17 @@ drm_backend_create_gl_renderer(struct drm_backend *b)
 	const struct pixel_format_info *format[3] = {
 		b->format,
 		fallback_format_for(b->format),
-		NULL,
 	};
 	struct gl_renderer_display_options options = {
 		.egl_platform = EGL_PLATFORM_GBM_KHR,
 		.egl_native_display = b->gbm,
 		.egl_surface_type = EGL_WINDOW_BIT,
 		.formats = format,
-		.formats_count = 2,
+		.formats_count = 1,
 	};
 
 	if (format[1])
-		options.formats_count = 3;
+		options.formats_count = 2;
 
 	return weston_compositor_init_renderer(b->compositor,
 					       WESTON_RENDERER_GL,
@@ -198,7 +197,6 @@ create_gbm_surface(struct gbm_device *gbm, struct drm_output *output)
 		return;
 	}
 
-#ifdef HAVE_GBM_MODIFIERS
 	if (!weston_drm_format_has_modifier(fmt, DRM_FORMAT_MOD_INVALID)) {
 		modifiers = weston_drm_format_get_modifiers(fmt, &num_modifiers);
 		output->gbm_surface =
@@ -207,7 +205,6 @@ create_gbm_surface(struct gbm_device *gbm, struct drm_output *output)
 							  output->format->format,
 							  modifiers, num_modifiers);
 	}
-#endif
 
 	/*
 	 * If we cannot use modifiers to allocate the GBM surface and the GBM
@@ -220,9 +217,8 @@ create_gbm_surface(struct gbm_device *gbm, struct drm_output *output)
 
 	/* We may allocate with no modifiers in the following situations:
 	 *
-	 * 1. old GBM version, so HAVE_GBM_MODIFIERS is false;
-	 * 2. the KMS driver does not support modifiers;
-	 * 3. if allocating with modifiers failed, what can happen when the KMS
+	 * 1. the KMS driver does not support modifiers;
+	 * 2. if allocating with modifiers failed, what can happen when the KMS
 	 *    display device supports modifiers but the GBM driver does not,
 	 *    e.g. the old i915 Mesa driver.
 	 */
@@ -285,7 +281,7 @@ drm_output_fini_egl(struct drm_output *output)
 
 	/* Destroying the GBM surface will destroy all our GBM buffers,
 	 * regardless of refcount. Ensure we destroy them here. */
-	if (!b->shutting_down &&
+	if (!b->compositor->shutting_down &&
 	    output->scanout_plane->state_cur->fb &&
 	    output->scanout_plane->state_cur->fb->type == BUFFER_GBM_SURFACE) {
 		drm_plane_reset_state(output->scanout_plane);
@@ -315,8 +311,10 @@ drm_output_render_gl(struct drm_output_state *state, pixman_region32_t *damage)
 		return NULL;
 	}
 
-	/* The renderer always produces an opaque image. */
-	ret = drm_fb_get_from_bo(bo, device, true, BUFFER_GBM_SURFACE);
+	/* Output transparent/opaque image according to the format required by
+	 * the client. */
+	ret = drm_fb_get_from_bo(bo, device, !output->format->opaque_substitute,
+	                         BUFFER_GBM_SURFACE);
 	if (!ret) {
 		weston_log("failed to get drm_fb for bo\n");
 		gbm_surface_release_buffer(output->gbm_surface, bo);

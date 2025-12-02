@@ -1,37 +1,46 @@
 #!/usr/bin/make -f
 
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+ifneq (,$(filter sparc64,$(DEB_HOST_ARCH)))
+BACKEND_VNC=false
+else
+BACKEND_VNC=true
+endif
+
+ifeq (,$(filter weston-doc,$(shell dh_listpackages)))
+CONFIGURE_FLAGS = -Ddoc=false
+else
+CONFIGURE_FLAGS = -Ddoc=true
+endif
+
 override_dh_auto_configure:
-	dh_auto_configure -- -Dscreenshare=true \
-		-Dsystemd=true
+	dh_auto_configure -- \
+	        -Dbackend-rdp=true \
+	        -Dbackend-vnc=$(BACKEND_VNC) \
+	        -Dscreenshare=true \
+		-Dsystemd=true \
+		$(CONFIGURE_FLAGS)
 
 override_dh_auto_test:
 	mkdir -p $(CURDIR)/debian/tmp/tmp/xdgruntimedir
+	mkdir -p /tmp/.X11-unix
+# Only make tests fatal for a subset of architectures
+# https://gitlab.freedesktop.org/wayland/weston/-/issues/739
+ifneq (,$(filter $(DEB_HOST_ARCH), amd64 arm64 armel armhf i386 ppc64el riscv64))
+	XDG_RUNTIME_DIR=$(CURDIR)/debian/tmp/tmp/xdgruntimedir dh_auto_test --  --timeout-multiplier 3
+else
 	XDG_RUNTIME_DIR=$(CURDIR)/debian/tmp/tmp/xdgruntimedir dh_auto_test || true
+endif
 
 override_dh_missing:
 	dh_missing --fail-missing -X.la
 
 override_dh_makeshlibs:
-	dh_makeshlibs -Xlibweston-12/ -- -c4 -ldebian/weston/usr/lib/$(DEB_TARGET_MULTIARCH)/weston/
+	dh_makeshlibs -Xlibweston-14/ -- -c4 -ldebian/weston/usr/lib/$(DEB_TARGET_MULTIARCH)/weston/
 
 override_dh_shlibdeps:
 	dh_shlibdeps -O--buildsystem=meson -- -ldebian/weston/usr/lib/$(DEB_TARGET_MULTIARCH)/weston/
 
-override_dh_fixperms:
-	dh_fixperms -Xusr/bin/weston-launch
-
-# Workaround for https://gitlab.freedesktop.org/wayland/weston/issues/269
-override_dh_install:
-	sed -e '/libdir=/d' \
-	    -e '/includedir=/d' \
-	    -i debian/tmp/usr/share/pkgconfig/libweston-12-protocols.pc
-	dh_install
-
 %:
-	dh $@ --with quilt --buildsystem=meson
-
-# For maintainer use only, generate a tarball:
-gentarball: SOURCE=$(shell dpkg-parsechangelog|awk '/^Source:/ {print $$2}')
-gentarball: UV=$(shell dpkg-parsechangelog|awk '/^Version:/ {print $$2}'|sed 's/-.*$$//')
-gentarball:
-	git archive --format=tar upstream-unstable --prefix=$(SOURCE)-$(UV)/ | gzip -9 > ../$(SOURCE)_$(UV).orig.tar.gz
+	dh $@ --buildsystem=meson
